@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Чат на веб-сокетах</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f2f3f5; }
+  .wrap { max-width: 800px; margin: 20px auto; padding: 0 12px; }
+  h1 { font-size: 20px; }
+
+  #login, #chat { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+  #login { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #chat { display: none; }
+  #loginError { color: #c0392b; width: 100%; min-height: 1em; }
+
+  .main { display: flex; gap: 12px; }
+  #messages { flex: 1; height: 380px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; padding: 8px; background: #fafafa; }
+  #messages div { margin-bottom: 4px; word-wrap: break-word; }
+  .system { color: #888; font-style: italic; }
+  .private { background: #fff6d6; padding: 2px 4px; border-radius: 4px; }
+  .error { color: #c0392b; }
+
+  #users { width: 190px; border: 1px solid #ddd; border-radius: 6px; padding: 8px; background: #fafafa; }
+  #users h3 { margin: 0 0 6px; font-size: 14px; }
+  #users ul { list-style: none; margin: 0; padding: 0; }
+  #users li { cursor: pointer; padding: 3px 6px; border-radius: 4px; font-weight: 600; }
+  #users li:hover { background: #e8eaed; }
+  #users li.selected { background: #dbe8ff; }
+  #users li.me { cursor: default; }
+  #users small { color: #888; display: block; margin-top: 8px; }
+
+  .send { display: flex; gap: 8px; margin-top: 10px; }
+  .send input[type=text] { flex: 1; }
+  input[type=text] { padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+  button { padding: 8px 16px; border: 0; border-radius: 6px; background: #3b82f6; color: #fff; font-size: 14px; cursor: pointer; }
+  button:hover { background: #2563eb; }
+  #target { margin-top: 6px; font-size: 13px; color: #555; min-height: 1.2em; }
+  #target a { cursor: pointer; color: #3b82f6; margin-left: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Чат на веб-сокетах</h1>
+
+
+  <div id="login">
+    <input type="text" id="nameInput" placeholder="Ваше имя" maxlength="20" autofocus>
+    <label>Цвет: <input type="color" id="colorInput" value="#3b82f6"></label>
+    <button id="loginBtn">Войти в чат</button>
+    <div id="loginError"></div>
+  </div>
+
+
+  <div id="chat">
+    <div class="main">
+      <div id="messages"></div>
+      <div id="users">
+        <h3>В чате:</h3>
+        <ul id="userList"></ul>
+        <small>Нажмите на имя, чтобы написать лично.</small>
+      </div>
+    </div>
+    <div id="target"></div>
+    <div class="send">
+      <input type="text" id="textInput" placeholder="Введите сообщение и нажмите Enter" maxlength="1000">
+      <button id="sendBtn">Отправить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  let ws = null;
+  let myName = null;
+  let selectedUser = null; 
+
+
+  function connect() {
+    const name = $('nameInput').value.trim();
+    if (!name) {
+      $('loginError').textContent = 'Введите имя.';
+      return;
+    }
+    $('loginError').textContent = '';
+
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}`);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'join', name, color: $('colorInput').value }));
+    };
+
+    ws.onmessage = (e) => handle(JSON.parse(e.data));
+
+    ws.onclose = () => {
+      if (myName) addLine('Соединение с сервером потеряно.', 'error');
+      else $('loginError').textContent = $('loginError').textContent || 'Не удалось подключиться.';
+    };
+  }
+
+
+  function handle(msg) {
+    switch (msg.type) {
+      case 'joined':
+        myName = msg.name;
+        $('login').style.display = 'none';
+        $('chat').style.display = 'block';
+        $('textInput').focus();
+        break;
+
+      case 'error':
+        if (!myName) {
+          $('loginError').textContent = msg.text;
+          ws.close();
+        } else {
+          addLine(msg.text, 'error');
+        }
+        break;
+
+      case 'system':
+        addLine(msg.text, 'system');
+        break;
+
+      case 'message':
+        addMessage(msg);
+        break;
+
+      case 'users':
+        renderUsers(msg.users);
+        break;
+    }
+  }
+
+
+  function addLine(text, cls) {
+    const div = document.createElement('div');
+    div.className = cls || '';
+    div.textContent = text;
+    append(div);
+  }
+
+  function addMessage(m) {
+    const div = document.createElement('div');
+
+    const author = document.createElement('b');
+    author.style.color = m.color;
+    author.textContent = m.name + (m.private ? ` → ${m.to} (лично)` : '') + ': ';
+
+    const text = document.createElement('span');
+    text.textContent = m.text; 
+
+    div.append(author, text);
+    if (m.private) div.className = 'private';
+    append(div);
+  }
+
+  function append(el) {
+    const box = $('messages');
+    box.appendChild(el);
+    box.scrollTop = box.scrollHeight;
+  }
+
+
+  function renderUsers(list) {
+    const ul = $('userList');
+    ul.innerHTML = '';
+
+
+    if (selectedUser && !list.some(u => u.name === selectedUser)) {
+      selectUser(null);
+    }
+
+    for (const u of list) {
+      const li = document.createElement('li');
+      li.textContent = u.name + (u.name === myName ? ' (вы)' : '');
+      li.style.color = u.color;
+      if (u.name === myName) {
+        li.className = 'me';
+      } else {
+        if (u.name === selectedUser) li.classList.add('selected');
+        li.onclick = () => selectUser(u.name === selectedUser ? null : u.name);
+      }
+      ul.appendChild(li);
+    }
+  }
+
+  function selectUser(name) {
+    selectedUser = name;
+    const t = $('target');
+    t.innerHTML = '';
+    if (name) {
+      t.append(`Личное сообщение для: ${name}`);
+      const cancel = document.createElement('a');
+      cancel.textContent = '[писать всем]';
+      cancel.onclick = () => selectUser(null);
+      t.appendChild(cancel);
+    }
+
+    document.querySelectorAll('#userList li').forEach(li => {
+      li.classList.toggle('selected', name && li.textContent === name);
+    });
+  }
+
+
+  function sendMessage() {
+    const input = $('textInput');
+    const text = input.value.trim();
+    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+    ws.send(JSON.stringify({ type: 'message', text, to: selectedUser }));
+    input.value = '';
+    input.focus();
+  }
+
+  $('loginBtn').onclick = connect;
+  $('nameInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
+  $('sendBtn').onclick = sendMessage;
+  $('textInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+</script>
+</body>
+</html>
